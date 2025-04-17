@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Blacklist Management</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Blacklist</h1>
+
+        <div class="add-section">
+            <input type="text" id="newItemInput" placeholder="Enter item to blacklist (e.g., domain, keyword)">
+            <button id="addItemButton">Add</button>
+        </div>
+
+        <div class="list-section">
+            <h2>Current Blacklist:</h2>
+            <ul id="blacklistItems">
+                <!-- Blacklist items will be loaded here -->
+                <li class="loading-placeholder">Loading...</li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
