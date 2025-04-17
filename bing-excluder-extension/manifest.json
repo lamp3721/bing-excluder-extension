@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Bing 黑名单自动排除 (隐藏)",
+  "version": "1.0",
+  "description": "自动给 Bing 搜索加上排除的域名，并在搜索框中隐藏过滤条件（支持自定义列表）。",
+  "author": "Your Name or Alias", // 你可以写上你的名字
+
+  "icons": {
+    "48": "icons/icon-48.png", // 可选：提供一个 48x48 像素的图标
+    "128": "icons/icon-128.png" // 可选：提供一个 128x128 像素的图标
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://cn.bing.com/search*",
+        "https://www.bing.com/search*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start" // 对应 Tampermonkey 的 @run-at document-start
+    }
+  ]
+  // 对于这个功能，通常不需要额外的 permissions，因为它只在匹配的页面内操作 DOM 和 location
+}

@@ -1,0 +1,264 @@
+```js
+// ==UserScript==
+// @name         Bing 自动排除黑名单网站 (隐藏过滤条件)
+// @namespace    http://tampermonkey.net/
+// @version      2.1
+// @description  自动给 Bing 搜索加上排除的域名，但在搜索框中隐藏过滤条件（支持自定义列表）
+// @author       ChatGPT & 用户反馈 & Refined
+// @match        https://cn.bing.com/search*
+// @match        https://www.bing.com/search*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // --- Configuration ---
+    const DEBUG = false; // 设置为 true 会在控制台打印详细日志，方便调试
+
+    // ✅ 自定义黑名单列表（想屏蔽的域名加在这里）
+    const blacklist = [
+        'csdn.net',
+        'zhihu.com',
+        'baidu.com'
+        // 添加更多你想屏蔽的域名...
+    ];
+
+    // --- Constants ---
+    const SEARCH_INPUT_SELECTOR = 'input[name="q"]'; // 搜索输入框的选择器
+    // Bing 可能使用不同的表单, role=search 比较通用, sb_form 通常是主搜索框的 ID
+    const SEARCH_FORM_SELECTOR = 'form#sb_form, form[role="search"]';
+    const BING_SEARCH_PATH = '/search'; // Bing 搜索的基础路径
+    const DEFAULT_FORM_PARAM = 'QBRE'; // 一个常见的 Bing 搜索 form 参数默认值
+
+    // --- Pre-calculated Values ---
+    // 规范化黑名单并创建排除字符串片段 (-site:domain)
+    const exclusionParts = blacklist.map(domain => `-site:${domain.trim().toLowerCase()}`);
+    // 创建用于精确清理的正则表达式 (匹配前后可能有空格的 -site:domain)
+    const cleaningRegexParts = exclusionParts.map(part => {
+        // 对 domain 中的特殊正则字符进行转义 (虽然域名通常不需要)
+        const escapedPart = part.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        // 匹配项：前面是空格或是字符串开头，后面是空格或是字符串结尾，忽略大小写，全局匹配
+         return new RegExp(`(?:\\s+|^)${escapedPart}(?:\\s+|$)`, 'gi');
+    });
+
+    // --- Helper Functions ---
+
+    // 打印日志 (仅当 DEBUG 为 true 时)
+    function log(...args) {
+        if (DEBUG) {
+            console.log('[Bing Excluder]', ...args);
+        }
+    }
+
+    // 等待指定的 DOM 元素出现
+    function waitForElement(selector, callback, timeout = 5000) {
+        const element = document.querySelector(selector);
+        if (element) {
+            log(`元素已存在: ${selector}`);
+            callback(element);
+            return;
+        }
+
+        let observer = null;
+        let timeoutId = null;
+
+        // 清理函数：停止观察并清除超时
+        const cleanup = () => {
+            if (observer) {
+                observer.disconnect();
+                observer = null;
+                log(`观察器已停止: ${selector}`);
+            }
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+        };
+
+        observer = new MutationObserver((mutations, obs) => {
+            const targetElement = document.querySelector(selector);
+            if (targetElement) {
+                log(`通过观察器找到元素: ${selector}`);
+                cleanup();
+                callback(targetElement);
+            }
+        });
+
+        log(`正在等待元素: ${selector}`);
+        observer.observe(document.documentElement, {
+            childList: true, // 观察子节点变化
+            subtree: true    // 观察所有后代节点
+        });
+
+        // 设置超时，防止无限等待
+        timeoutId = setTimeout(() => {
+            if (observer) { // 检查观察器是否还在（可能已被找到并清理）
+               log(`在 ${timeout}ms 内未找到元素: ${selector}`);
+               cleanup();
+            }
+        }, timeout);
+    }
+
+    // 从包含排除项的完整查询中，获取干净的用户原始查询
+    function getCleanQuery(fullQuery) {
+        if (!fullQuery) return '';
+        // 在前后加空格，方便正则表达式匹配开头和结尾的情况
+        let cleanQuery = ` ${fullQuery} `;
+        log('开始清理查询:', cleanQuery);
+        // 遍历所有排除项的正则表达式
+        cleaningRegexParts.forEach((regex, index) => {
+            // 将匹配到的排除项替换为单个空格
+            cleanQuery = cleanQuery.replace(regex, ' ');
+            log(`移除 ${exclusionParts[index]} 后:`, cleanQuery);
+        });
+        // 将多个连续空格替换为单个空格，并移除首尾空格
+        cleanQuery = cleanQuery.replace(/\s\s+/g, ' ').trim();
+        log('最终清理结果:', cleanQuery);
+        return cleanQuery;
+    }
+
+    // --- Core Logic ---
+
+    // 1. 处理页面加载: 检查 URL，必要时重定向，否则清理搜索框
+    function handlePageLoad() {
+        const currentUrl = new URL(window.location.href);
+        const searchParams = currentUrl.searchParams;
+        const query = searchParams.get('q'); // 获取 URL 中的 q 参数
+
+        if (!query) {
+            log('页面加载时未发现 q 查询参数.');
+            return false; // 没有查询参数，无需处理
+        }
+        log('URL 初始查询:', query);
+
+        const queryLower = query.toLowerCase();
+        // 找出 URL 中缺失的排除项
+        const missingExclusions = exclusionParts.filter(part => !queryLower.includes(part));
+
+        if (missingExclusions.length > 0) {
+            // 如果有缺失项，说明需要重定向
+            log('发现缺失的排除项:', missingExclusions);
+            // 构建新的查询：在原始查询后附加所有缺失的排除项
+            let queryNeedsUpdate = query;
+            if (queryNeedsUpdate.length > 0 && !queryNeedsUpdate.endsWith(' ')) {
+                 queryNeedsUpdate += ' '; // 如果原始查询非空且末尾没空格，则加一个
+            }
+            queryNeedsUpdate += missingExclusions.join(' '); // 用空格连接所有缺失项
+             queryNeedsUpdate = queryNeedsUpdate.trim(); // 清理可能的多余空格
+
+            log('准备重定向. 新查询:', queryNeedsUpdate);
+            searchParams.set('q', queryNeedsUpdate); // 更新 q 参数
+
+            // 保留一些重要的 Bing 参数 (如果当前 URL 中存在的话)
+            const preservedParams = ['form', 'pc', 'cvid', 'showconv']; // 可根据需要添加更多
+            preservedParams.forEach(p => {
+                 if(currentUrl.searchParams.has(p) && !searchParams.has(p)) { // 确保不覆盖已有的参数
+                     searchParams.set(p, currentUrl.searchParams.get(p));
+                 }
+            });
+
+            // 构建最终重定向的 URL (路径 + 查询参数 + 哈希值)
+            const newUrl = `${currentUrl.pathname}?${searchParams.toString()}${currentUrl.hash}`;
+            log('将重定向至:', newUrl);
+
+            window.location.replace(newUrl); // 使用 replace 跳转，不留历史记录
+            return true; // 返回 true 表示发生了重定向
+        } else {
+            // 如果 URL 中已包含所有排除项
+            log('URL 中已包含所有排除项.');
+            // 无需重定向，只需清理页面上的搜索输入框
+            const cleanQuery = getCleanQuery(query); // 获取清理后的查询字符串
+            // 等待输入框加载完成后再设置其值
+            waitForElement(SEARCH_INPUT_SELECTOR, (input) => {
+                if (input.value !== cleanQuery) {
+                    log('更新输入框值为清理后的查询:', cleanQuery);
+                    input.value = cleanQuery; // 设置输入框的值
+                } else {
+                     log('输入框值已与清理后查询一致.');
+                }
+            });
+            return false; // 返回 false 表示没有发生重定向
+        }
+    }
+
+    // 2. 处理表单提交: 拦截默认提交，添加排除项，然后导航到新 URL
+    function handleFormSubmit() {
+        // 等待搜索表单加载完成
+        waitForElement(SEARCH_FORM_SELECTOR, (form) => {
+            log('搜索表单已找到:', form);
+            // 监听表单的 submit 事件 (使用捕获阶段，优先处理)
+            form.addEventListener('submit', (event) => {
+                log('捕获到表单提交事件.');
+                const input = form.querySelector(SEARCH_INPUT_SELECTOR); // 获取表单内的输入框
+                if (!input) {
+                    log('在表单中未找到搜索输入框.');
+                    return; // 找不到输入框则不处理
+                }
+
+                const userInput = input.value.trim(); // 获取用户输入的原始值
+                if (!userInput) {
+                    log('用户输入为空，允许默认提交.');
+                    // 对于空搜索，可以选择阻止或允许默认行为，这里选择允许
+                    return;
+                }
+                log('用户输入:', userInput);
+
+                event.preventDefault(); // 阻止表单的默认提交行为
+
+                // 构建最终要搜索的查询字符串
+                let targetQuery = userInput;
+                const userInputLower = userInput.toLowerCase();
+                // 遍历所有排除项
+                exclusionParts.forEach(part => {
+                    // 只有当用户输入的内容本身不包含这个排除项时，才添加它
+                    if (!userInputLower.includes(part)) {
+                        targetQuery += ` ${part}`;
+                    }
+                });
+                targetQuery = targetQuery.trim(); // 清理可能的多余空格
+                log('构建的目标查询 (含排除项):', targetQuery);
+
+                // 构建新的搜索 URL
+                const newUrl = new URL(window.location.origin); // 使用网站根地址
+                newUrl.pathname = BING_SEARCH_PATH; // 设置为搜索路径
+                newUrl.searchParams.set('q', targetQuery); // 设置 q 参数
+
+                // 保留或设置 form 参数
+                const currentFormParams = new URLSearchParams(window.location.search).get('form');
+                newUrl.searchParams.set('form', currentFormParams || DEFAULT_FORM_PARAM);
+
+                // (可选) 保留其他常用参数
+                 const paramsToMaybePreserve = ['pc', 'cvid'];
+                 const currentParams = new URLSearchParams(window.location.search);
+                 paramsToMaybePreserve.forEach(p => {
+                     if (currentParams.has(p)) {
+                         newUrl.searchParams.set(p, currentParams.get(p));
+                     }
+                 });
+
+                log('准备导航至新 URL:', newUrl.toString());
+                window.location.href = newUrl.toString(); // 跳转到新构建的 URL
+
+            }, true); // true 表示使用捕获阶段
+        });
+    }
+
+    // --- Execution ---
+    log('脚本开始执行...');
+    // 首先处理页面加载逻辑（可能发生重定向）
+    const redirected = handlePageLoad();
+
+    // 如果页面加载时没有发生重定向，则设置表单提交监听器
+    if (!redirected) {
+        log('页面加载时未重定向，设置表单提交监听器.');
+        handleFormSubmit();
+        // 清理输入框的操作已在 handlePageLoad 的 else 分支中通过 waitForElement 异步执行
+    } else {
+         log('页面加载时已发起重定向，脚本将在新页面重新运行.');
+    }
+
+})();
+```
+
