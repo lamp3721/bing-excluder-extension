@@ -1,107 +1,89 @@
-// 注意：这里不需要 Tampermonkey 的 // ==UserScript== ... // ==/UserScript== 部分
+// NOTE: This is the MODIFIED content script.
+// Remove the old `const blacklist = [...]` line.
 
 (function () {
     'use strict';
 
     // --- Configuration ---
     const DEBUG = false; // 设置为 true 会在控制台打印详细日志，方便调试
-
-    // ✅ 自定义黑名单列表（想屏蔽的域名加在这里）
-    const blacklist = [
-        'csdn.net',
-        'zhihu.com',
-        'baidu.com'
-        // 添加更多你想屏蔽的域名...
-    ];
+    const storageKey = 'bingExcluderBlacklist'; // SAME KEY as in options.js
+    const defaultBlacklist = ['csdn.net', 'zhihu.com', 'baidu.com']; // Fallback defaults
 
     // --- Constants ---
-    const SEARCH_INPUT_SELECTOR = 'input[name="q"]'; // 搜索输入框的选择器
+    const SEARCH_INPUT_SELECTOR = 'input[name="q"]';
     const SEARCH_FORM_SELECTOR = 'form#sb_form, form[role="search"]';
-    const BING_SEARCH_PATH = '/search'; // Bing 搜索的基础路径
-    const DEFAULT_FORM_PARAM = 'QBRE'; // 一个常见的 Bing 搜索 form 参数默认值
-
-    // --- Pre-calculated Values ---
-    const exclusionParts = blacklist.map(domain => `-site:${domain.trim().toLowerCase()}`);
-    const cleaningRegexParts = exclusionParts.map(part => {
-        const escapedPart = part.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-         return new RegExp(`(?:\\s+|^)${escapedPart}(?:\\s+|$)`, 'gi');
-    });
+    const BING_SEARCH_PATH = '/search';
+    const DEFAULT_FORM_PARAM = 'QBRE';
 
     // --- Helper Functions ---
     function log(...args) {
         if (DEBUG) {
-            console.log('[Bing Excluder Ext]', ...args); // 稍微改下前缀区分
+            console.log('[Bing Excluder Script]', ...args); // Consistent prefix
         }
     }
 
-    function waitForElement(selector, callback, timeout = 5000) {
-        const element = document.querySelector(selector);
-        if (element) {
-            log(`元素已存在: ${selector}`);
-            callback(element);
-            return;
-        }
-        let observer = null;
-        let timeoutId = null;
-        const cleanup = () => {
-            if (observer) observer.disconnect();
-            if (timeoutId) clearTimeout(timeoutId);
-            observer = null; timeoutId = null;
-            log(`观察器已停止: ${selector}`);
-        };
-        observer = new MutationObserver((mutations, obs) => {
-            const targetElement = document.querySelector(selector);
-            if (targetElement) {
-                log(`通过观察器找到元素: ${selector}`);
-                cleanup();
-                callback(targetElement);
-            }
+    // ... (keep other helper functions like waitForElement, getCleanQuery etc.) ...
+    // BUT ensure getCleanQuery uses the dynamically loaded cleaningRegexParts
+
+    // --- Core Logic ---
+
+    // Global variables for blacklist derived data (populated after loading)
+    let exclusionParts = [];
+    let cleaningRegexParts = [];
+
+    function initializeBlacklistData(blacklist) {
+        log("Initializing with blacklist:", blacklist);
+        exclusionParts = blacklist.map(domain => `-site:${domain.trim().toLowerCase()}`);
+        cleaningRegexParts = exclusionParts.map(part => {
+            const escapedPart = part.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            return new RegExp(`(?:\\s+|^)${escapedPart}(?:\\s+|$)`, 'gi');
         });
-        log(`正在等待元素: ${selector}`);
-        observer.observe(document.documentElement, { childList: true, subtree: true });
-        timeoutId = setTimeout(() => {
-            if (observer) {
-               log(`在 ${timeout}ms 内未找到元素: ${selector}`);
-               cleanup();
-            }
-        }, timeout);
+        log("Generated exclusion parts:", exclusionParts);
     }
 
     function getCleanQuery(fullQuery) {
         if (!fullQuery) return '';
         let cleanQuery = ` ${fullQuery} `;
-        log('开始清理查询:', cleanQuery);
+        log('Starting query cleaning:', cleanQuery);
+        // Use the globally defined cleaningRegexParts
         cleaningRegexParts.forEach((regex, index) => {
             cleanQuery = cleanQuery.replace(regex, ' ');
-            log(`移除 ${exclusionParts[index]} 后:`, cleanQuery);
+            log(`After removing ${exclusionParts[index]}:`, cleanQuery); // Use global exclusionParts too
         });
         cleanQuery = cleanQuery.replace(/\s\s+/g, ' ').trim();
-        log('最终清理结果:', cleanQuery);
+        log('Final cleaned query:', cleanQuery);
         return cleanQuery;
     }
 
-    // --- Core Logic ---
     function handlePageLoad() {
+        // Check if blacklist data is ready before proceeding
+        if (exclusionParts.length === 0) {
+            log("Blacklist not yet initialized on page load check. This shouldn't happen if loading finished.");
+            return false; // Cannot proceed without blacklist
+        }
+
         const currentUrl = new URL(window.location.href);
         const searchParams = currentUrl.searchParams;
         const query = searchParams.get('q');
         if (!query) {
-            log('页面加载时未发现 q 查询参数.');
+            log('No q query parameter found on page load.');
             return false;
         }
-        log('URL 初始查询:', query);
+        log('URL initial query:', query);
         const queryLower = query.toLowerCase();
         const missingExclusions = exclusionParts.filter(part => !queryLower.includes(part));
+
         if (missingExclusions.length > 0) {
-            log('发现缺失的排除项:', missingExclusions);
+            log('Missing exclusion parts found:', missingExclusions);
             let queryNeedsUpdate = query;
             if (queryNeedsUpdate.length > 0 && !queryNeedsUpdate.endsWith(' ')) {
                  queryNeedsUpdate += ' ';
             }
             queryNeedsUpdate += missingExclusions.join(' ');
             queryNeedsUpdate = queryNeedsUpdate.trim();
-            log('准备重定向. 新查询:', queryNeedsUpdate);
+            log('Redirecting. New query:', queryNeedsUpdate);
             searchParams.set('q', queryNeedsUpdate);
+            // Preserve common parameters
             const preservedParams = ['form', 'pc', 'cvid', 'showconv'];
             preservedParams.forEach(p => {
                  if(currentUrl.searchParams.has(p) && !searchParams.has(p)) {
@@ -109,66 +91,108 @@
                  }
             });
             const newUrl = `${currentUrl.pathname}?${searchParams.toString()}${currentUrl.hash}`;
-            log('将重定向至:', newUrl);
+            log('Redirecting to:', newUrl);
             window.location.replace(newUrl);
-            return true;
+            return true; // Indicate redirection happened
         } else {
-            log('URL 中已包含所有排除项.');
+            log('All exclusion parts already present in URL.');
+            // URL is correct, update the input field to show the *clean* query
             const cleanQuery = getCleanQuery(query);
             waitForElement(SEARCH_INPUT_SELECTOR, (input) => {
                 if (input.value !== cleanQuery) {
-                    log('更新输入框值为清理后的查询:', cleanQuery);
+                    log('Updating input field value to cleaned query:', cleanQuery);
                     input.value = cleanQuery;
                 } else {
-                     log('输入框值已与清理后查询一致.');
+                     log('Input field value already matches cleaned query.');
                 }
             });
-            return false;
+            return false; // No redirection needed
         }
     }
 
     function handleFormSubmit() {
+         // Check if blacklist data is ready
+        if (exclusionParts.length === 0) {
+            log("Blacklist not yet initialized on form submit setup. Waiting...");
+             // Could potentially retry or wait, but often load finishes before submit happens
+            return;
+        }
         waitForElement(SEARCH_FORM_SELECTOR, (form) => {
-            log('搜索表单已找到:', form);
+            log('Search form found:', form);
+            // Use a flag to prevent adding multiple listeners if script re-runs somehow
+            if (form.dataset.bingExcluderListenerAttached) return;
+            form.dataset.bingExcluderListenerAttached = 'true';
+
             form.addEventListener('submit', (event) => {
-                log('捕获到表单提交事件.');
+                log('Form submit event captured.');
                 const input = form.querySelector(SEARCH_INPUT_SELECTOR);
-                if (!input) { log('在表单中未找到搜索输入框.'); return; }
+                if (!input) { log('Search input not found in form.'); return; }
+
                 const userInput = input.value.trim();
-                if (!userInput) { log('用户输入为空，允许默认提交.'); return; }
-                log('用户输入:', userInput);
-                event.preventDefault();
+                if (!userInput) { log('User input is empty, allowing default submit.'); return; }
+                log('User input:', userInput);
+
+                event.preventDefault(); // Prevent default form submission
+
                 let targetQuery = userInput;
                 const userInputLower = userInput.toLowerCase();
+
+                // Add any missing exclusion parts
                 exclusionParts.forEach(part => {
-                    if (!userInputLower.includes(part)) { targetQuery += ` ${part}`; }
+                    if (!userInputLower.includes(part)) {
+                        targetQuery += ` ${part}`;
+                    }
                 });
                 targetQuery = targetQuery.trim();
-                log('构建的目标查询 (含排除项):', targetQuery);
+                log('Constructed target query (with exclusions):', targetQuery);
+
+                // Build the new URL
                 const newUrl = new URL(window.location.origin);
                 newUrl.pathname = BING_SEARCH_PATH;
                 newUrl.searchParams.set('q', targetQuery);
-                const currentFormParams = new URLSearchParams(window.location.search).get('form');
-                newUrl.searchParams.set('form', currentFormParams || DEFAULT_FORM_PARAM);
-                const paramsToMaybePreserve = ['pc', 'cvid'];
-                const currentParams = new URLSearchParams(window.location.search);
+
+                // Preserve form parameter and potentially others
+                const currentUrlParams = new URLSearchParams(window.location.search);
+                const currentForm = currentUrlParams.get('form');
+                newUrl.searchParams.set('form', currentForm || DEFAULT_FORM_PARAM);
+                 const paramsToMaybePreserve = ['pc', 'cvid'];
                 paramsToMaybePreserve.forEach(p => {
-                    if (currentParams.has(p)) { newUrl.searchParams.set(p, currentParams.get(p)); }
+                    if (currentUrlParams.has(p)) { newUrl.searchParams.set(p, currentUrlParams.get(p)); }
                 });
-                log('准备导航至新 URL:', newUrl.toString());
+
+                log('Navigating to new URL:', newUrl.toString());
                 window.location.href = newUrl.toString();
-            }, true);
+
+            }, true); // Use capture phase
         });
     }
 
     // --- Execution ---
-    log('脚本开始执行...');
-    const redirected = handlePageLoad();
-    if (!redirected) {
-        log('页面加载时未重定向，设置表单提交监听器.');
-        handleFormSubmit();
-    } else {
-         log('页面加载时已发起重定向，脚本将在新页面重新运行.');
-    }
+    log('Script execution started...');
 
-})(); // 立即执行函数结束
+    // Load blacklist from storage FIRST
+    chrome.storage.sync.get([storageKey], (result) => {
+        let loadedBlacklist;
+        if (chrome.runtime.lastError) {
+            console.error("Error loading blacklist in content script:", chrome.runtime.lastError);
+            log("Using default blacklist due to error.");
+            loadedBlacklist = [...defaultBlacklist];
+        } else {
+            loadedBlacklist = result[storageKey] || [...defaultBlacklist];
+            log("Blacklist loaded successfully in content script:", loadedBlacklist);
+        }
+
+        // Initialize blacklist-dependent variables
+        initializeBlacklistData(loadedBlacklist);
+
+        // Now proceed with page logic
+        const redirected = handlePageLoad();
+        if (!redirected) {
+            log('Page load did not redirect, setting up form submit listener.');
+            handleFormSubmit();
+        } else {
+            log('Page load initiated redirect, script will re-run on the new page.');
+        }
+    });
+
+})(); // End IIFE

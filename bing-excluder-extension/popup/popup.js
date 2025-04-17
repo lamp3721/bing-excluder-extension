@@ -1,124 +1,127 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const newItemInput = document.getElementById('newItemInput');
-    const addItemButton = document.getElementById('addItemButton');
-    const blacklistItemsUl = document.getElementById('blacklistItems');
+    const blacklistItemsUl = document.getElementById('blacklist-items');
+    const newDomainInput = document.getElementById('new-domain');
+    const addButton = document.getElementById('add-button');
+    const statusMessage = document.getElementById('status-message');
 
-    const STORAGE_KEY = 'managedBlacklist'; // Key for storing the list
+    const storageKey = 'bingExcluderBlacklist';
+    const defaultBlacklist = ['csdn.net', 'zhihu.com', 'baidu.com']; // Default if nothing is stored yet
 
-    // --- Default Items ---
-    const DEFAULT_BLACKLIST_ITEMS = [
-        "example-domain.com",
-        "bad-keyword",
-        "another-site.org"
-    ];
+    let currentBlacklist = [];
 
-    // --- Load and Render Blacklist (with default population logic) ---
-    function loadAndRenderBlacklist() {
-        blacklistItemsUl.innerHTML = '<li class="loading-placeholder">Loading...</li>';
+    // --- Helper Functions ---
 
-        chrome.storage.local.get([STORAGE_KEY], (result) => {
-            let items = result[STORAGE_KEY]; // Get items
-
-            // Check if storage is empty or doesn't exist (first load)
-            if (items === undefined || items === null) {
-                console.log("Blacklist storage empty, initializing with defaults.");
-                items = [...DEFAULT_BLACKLIST_ITEMS]; // Use a copy of defaults
-
-                // Save the defaults to storage immediately
-                chrome.storage.local.set({ [STORAGE_KEY]: items }, () => {
-                    console.log("Default blacklist saved to storage.");
-                    renderBlacklist(items); // Render the newly added defaults
-                });
-            } else {
-                 // Storage exists, render the items from storage
-                 console.log("Loading blacklist from storage.");
-                 renderBlacklist(items);
-            }
-        });
+    function showStatus(message, isError = false) {
+        statusMessage.textContent = message;
+        statusMessage.className = isError ? 'status error' : 'status';
+        // Clear message after a few seconds
+        setTimeout(() => {
+            statusMessage.textContent = '';
+            statusMessage.className = 'status';
+        }, 3000);
     }
 
-    function renderBlacklist(items) {
-        blacklistItemsUl.innerHTML = ''; // Clear previous items/loading state
+    function isValidDomain(domain) {
+        // Basic validation: not empty, no spaces, contains at least one dot
+        if (!domain || domain.trim() === '' || /\s/.test(domain)) {
+            return false;
+        }
+        // Very basic check - could be more robust (e.g., using regex)
+        return domain.includes('.');
+    }
 
-        if (items.length === 0) {
-            // This case should ideally not happen on first load due to default logic,
-            // but good to keep for situations where user removes all items.
-            blacklistItemsUl.innerHTML = '<li class="empty-placeholder">Blacklist is empty.</li>';
+    function renderBlacklist() {
+        blacklistItemsUl.innerHTML = ''; // Clear existing list
+        if (currentBlacklist.length === 0) {
+            blacklistItemsUl.innerHTML = '<li>Blacklist is empty.</li>';
             return;
         }
 
-        items.forEach((item, index) => {
+        // Sort alphabetically for better readability
+        const sortedList = [...currentBlacklist].sort();
+
+        sortedList.forEach(domain => {
             const li = document.createElement('li');
-            const textSpan = document.createElement('span');
-            textSpan.textContent = item;
+            const span = document.createElement('span');
+            span.textContent = domain;
             const removeButton = document.createElement('button');
             removeButton.textContent = 'Remove';
-            removeButton.classList.add('remove-button');
-            removeButton.addEventListener('click', () => {
-                handleRemoveItem(index);
-            });
-            li.appendChild(textSpan);
+            removeButton.className = 'remove-button';
+            removeButton.dataset.domain = domain; // Store domain in data attribute
+
+            removeButton.addEventListener('click', handleRemove);
+
+            li.appendChild(span);
             li.appendChild(removeButton);
             blacklistItemsUl.appendChild(li);
         });
     }
 
-    // --- Add Item Logic ---
-    function handleAddItem() {
-        const newItem = newItemInput.value.trim();
-        if (!newItem) return;
-
-        chrome.storage.local.get([STORAGE_KEY], (result) => {
-            // Ensure items is an array, even if storage was somehow corrupted
-            const items = Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
-
-            if (items.some(item => item.toLowerCase() === newItem.toLowerCase())) {
-                console.log(`Item "${newItem}" already exists.`);
-                newItemInput.value = '';
-                newItemInput.focus();
-                return;
+    function loadBlacklist() {
+        chrome.storage.sync.get([storageKey], (result) => {
+            if (chrome.runtime.lastError) {
+                console.error("Error loading blacklist:", chrome.runtime.lastError);
+                showStatus("Error loading blacklist.", true);
+                currentBlacklist = [...defaultBlacklist]; // Fallback
+            } else {
+                // Use stored list, or default if storage is empty/undefined
+                currentBlacklist = result[storageKey] || [...defaultBlacklist];
+                console.log('Blacklist loaded:', currentBlacklist);
             }
-
-            const updatedItems = [...items, newItem];
-
-            chrome.storage.local.set({ [STORAGE_KEY]: updatedItems }, () => {
-                console.log(`Added "${newItem}" to blacklist.`);
-                renderBlacklist(updatedItems);
-                newItemInput.value = '';
-                newItemInput.focus();
-            });
+            renderBlacklist();
         });
     }
 
-    // --- Remove Item Logic ---
-    function handleRemoveItem(indexToRemove) {
-        chrome.storage.local.get([STORAGE_KEY], (result) => {
-            // Ensure items is an array
-             const items = Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
-
-            if (indexToRemove < 0 || indexToRemove >= items.length) {
-                console.error("Invalid index to remove:", indexToRemove);
-                return;
+    function saveBlacklist() {
+        chrome.storage.sync.set({ [storageKey]: currentBlacklist }, () => {
+            if (chrome.runtime.lastError) {
+                console.error("Error saving blacklist:", chrome.runtime.lastError);
+                showStatus("Error saving blacklist.", true);
+            } else {
+                console.log('Blacklist saved:', currentBlacklist);
+                showStatus("Blacklist updated successfully!");
+                renderBlacklist(); // Re-render to reflect changes (like sorting)
             }
-
-            const itemRemoved = items[indexToRemove];
-            const updatedItems = items.filter((_, index) => index !== indexToRemove);
-
-            chrome.storage.local.set({ [STORAGE_KEY]: updatedItems }, () => {
-                console.log(`Removed "${itemRemoved}" from blacklist.`);
-                renderBlacklist(updatedItems);
-            });
         });
     }
 
-    // --- Event Listeners ---
-    addItemButton.addEventListener('click', handleAddItem);
-    newItemInput.addEventListener('keypress', (event) => {
+    // --- Event Handlers ---
+
+    function handleAdd() {
+        const newDomain = newDomainInput.value.trim().toLowerCase();
+
+        if (!isValidDomain(newDomain)) {
+            showStatus("Please enter a valid domain name (e.g., example.com).", true);
+            return;
+        }
+
+        if (currentBlacklist.includes(newDomain)) {
+            showStatus(`Domain "${newDomain}" is already in the blacklist.`, true);
+            return;
+        }
+
+        currentBlacklist.push(newDomain);
+        newDomainInput.value = ''; // Clear input field
+        saveBlacklist(); // Save and re-render
+    }
+
+    function handleRemove(event) {
+        const domainToRemove = event.target.dataset.domain;
+        if (domainToRemove) {
+            currentBlacklist = currentBlacklist.filter(domain => domain !== domainToRemove);
+            saveBlacklist(); // Save and re-render
+        }
+    }
+
+    // --- Initialization ---
+
+    addButton.addEventListener('click', handleAdd);
+    // Allow adding by pressing Enter in the input field
+    newDomainInput.addEventListener('keypress', (event) => {
         if (event.key === 'Enter') {
-            handleAddItem();
+            handleAdd();
         }
     });
 
-    // --- Initial Load ---
-    loadAndRenderBlacklist();
+    loadBlacklist(); // Load the list when the options page opens
 });

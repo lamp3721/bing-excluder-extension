@@ -1,28 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Blacklist Management</title>
-    <link rel="stylesheet" href="popup.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bing Excluder Settings</title>
+    <link rel="stylesheet" href="options.css">
 </head>
 <body>
+    <h1>Bing Search Excluder - Blacklist</h1>
+
     <div class="container">
-        <h1>Blacklist</h1>
+        <h2>Current Blacklist</h2>
+        <ul id="blacklist-items">
+            <!-- Blacklist items will be loaded here -->
+            <li>Loading...</li>
+        </ul>
 
+        <h2>Add Domain to Blacklist</h2>
         <div class="add-section">
-            <input type="text" id="newItemInput" placeholder="Enter item to blacklist (e.g., domain, keyword)">
-            <button id="addItemButton">Add</button>
+            <label for="new-domain">Domain:</label>
+            <input type="text" id="new-domain" placeholder="e.g., example.com">
+            <button id="add-button">Add</button>
         </div>
-
-        <div class="list-section">
-            <h2>Current Blacklist:</h2>
-            <ul id="blacklistItems">
-                <!-- Blacklist items will be loaded here -->
-                <li class="loading-placeholder">Loading...</li>
-            </ul>
-        </div>
+        <p class="status" id="status-message"></p>
     </div>
 
-    <script src="popup.js"></script>
+    <script src="options.js"></script>
 </body>
 </html>
